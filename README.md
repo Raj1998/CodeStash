@@ -1,36 +1,41 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Split the Bill
+
+A mobile-first Next.js app for splitting a restaurant bill at the table.
 
 ## Getting Started
 
-First, run the development server:
+Install dependencies and run the dev server:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Receipt Upload Setup
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The receipt image upload feature uses the Google Gemini vision API with the `gemini-1.5-flash` model.
 
-## Learn More
+1. Copy the example env file values into your local env setup.
+2. Set your Gemini API key:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+NEXT_PUBLIC_GEMINI_API_KEY=your-gemini-api-key-here
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Because this app currently calls Gemini directly from the browser, the key is exposed to the client. Treat this as a prototype/stretch-goal setup and use an appropriately restricted key.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Features
 
-## Deploy on Vercel
+- Add people with color-coded avatars
+- Add, edit, and delete bill items
+- Assign shared items across multiple people
+- Quick Split mode for equal bill splitting
+- Tax and tip handling in dollars or percentage
+- Per-person summary with copy-to-clipboard support
+- Receipt image upload to auto-import item lines
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Notes
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Receipt upload sends the selected image to Gemini and expects a JSON array of items back. Imported items are added to the normal editable item list, so you can review and correct them before finalizing the split.

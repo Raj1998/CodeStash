@@ -5,6 +5,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useBill } from "@/hooks/useBill";
 import type { BillItem, Person, PersonTotal, SplitMode, TipInputMode } from "@/types";
 
+const GEMINI_MODEL = "gemini-3-flash-preview";
+const RECEIPT_IMPORT_PROMPT =
+  'Parse this restaurant receipt. Return ONLY a JSON array of items, no markdown, no explanation. Format: [{"name": string, "price": number}] where price is in dollars as a decimal. Exclude tax, tip, and totals.';
+
+interface ImportedReceiptItem {
+  name: string;
+  price: number;
+}
+
 const formatCents = (value: number) =>
   new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -40,6 +49,105 @@ const getInitials = (name: string) => {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase() ?? "")
     .join("");
+};
+
+const readFileAsBase64 = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      const result = reader.result;
+
+      if (typeof result !== "string") {
+        reject(new Error("Failed to read file"));
+        return;
+      }
+
+      const [, base64 = ""] = result.split(",");
+      resolve(base64);
+    };
+
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+
+const normalizeImportedItems = (payload: unknown): ImportedReceiptItem[] => {
+  if (!Array.isArray(payload)) {
+    throw new Error("Receipt response was not an item array");
+  }
+
+  const items = payload
+    .map((entry) => {
+      if (typeof entry !== "object" || entry === null) {
+        return null;
+      }
+
+      const name = "name" in entry ? entry.name : undefined;
+      const price = "price" in entry ? entry.price : undefined;
+
+      if (typeof name !== "string") {
+        return null;
+      }
+
+      const normalizedPrice = typeof price === "number" ? price : Number(price);
+
+      if (!Number.isFinite(normalizedPrice) || normalizedPrice <= 0) {
+        return null;
+      }
+
+      return {
+        name: name.trim(),
+        price: normalizedPrice,
+      } satisfies ImportedReceiptItem;
+    })
+    .filter((entry): entry is ImportedReceiptItem => Boolean(entry && entry.name));
+
+  if (items.length === 0) {
+    throw new Error("Receipt response did not contain valid items");
+  }
+
+  return items;
+};
+
+const extractGeminiText = (responseBody: unknown) => {
+  if (typeof responseBody !== "object" || responseBody === null) {
+    throw new Error("Invalid Gemini response");
+  }
+
+  if (
+    "candidates" in responseBody &&
+    Array.isArray(responseBody.candidates) &&
+    responseBody.candidates.length > 0
+  ) {
+    const candidate = responseBody.candidates[0];
+
+    if (
+      typeof candidate === "object" &&
+      candidate !== null &&
+      "content" in candidate &&
+      typeof candidate.content === "object" &&
+      candidate.content !== null &&
+      "parts" in candidate.content &&
+      Array.isArray(candidate.content.parts)
+    ) {
+      const parts = candidate.content.parts as unknown[];
+      const textParts = parts
+        .map((part: unknown) => {
+          if (typeof part === "object" && part !== null && "text" in part) {
+            return typeof part.text === "string" ? part.text : "";
+          }
+
+          return "";
+        })
+        .filter(Boolean);
+
+      if (textParts.length > 0) {
+        return textParts.join("").trim();
+      }
+    }
+  }
+
+  throw new Error("Gemini did not return receipt items");
 };
 
 const buildSummaryText = (
@@ -273,6 +381,7 @@ export default function Home() {
   const personNameInputRef = useRef<HTMLInputElement>(null);
   const itemNameInputRef = useRef<HTMLInputElement>(null);
   const itemPriceInputRef = useRef<HTMLInputElement>(null);
+  const receiptInputRef = useRef<HTMLInputElement>(null);
 
   const [personName, setPersonName] = useState("");
   const [itemName, setItemName] = useState("");
@@ -281,6 +390,9 @@ export default function Home() {
   const [tipInput, setTipInput] = useState("");
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
   const [newItemId, setNewItemId] = useState<string | null>(null);
+  const [receiptImportStatus, setReceiptImportStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [receiptImportError, setReceiptImportError] = useState<string | null>(null);
+  const [receiptImportCount, setReceiptImportCount] = useState<number | null>(null);
 
   const totalsMap = personTotals();
   const subtotalCents = useMemo(
@@ -337,21 +449,16 @@ export default function Home() {
       return;
     }
 
-    const previousLength = state.items.length;
-
     addItem({
       name: trimmedName,
       priceCents,
     });
     setItemName("");
     setItemPrice("");
+    setReceiptImportCount(null);
+    setReceiptImportError(null);
+    setReceiptImportStatus("idle");
     window.requestAnimationFrame(() => itemNameInputRef.current?.focus());
-    window.setTimeout(() => {
-      const newestItem = state.items[previousLength];
-      if (newestItem) {
-        setNewItemId(newestItem.id);
-      }
-    }, 0);
   };
 
   useEffect(() => {
@@ -411,6 +518,95 @@ export default function Home() {
     }
   };
 
+  const handleDismissImportBanner = () => {
+    setReceiptImportCount(null);
+    setReceiptImportError(null);
+    setReceiptImportStatus("idle");
+  };
+
+  const handleReceiptUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+
+    if (!apiKey) {
+      setReceiptImportStatus("error");
+      setReceiptImportError(
+        "Couldn't read the receipt — try a clearer photo or add items manually",
+      );
+      event.target.value = "";
+      return;
+    }
+
+    setReceiptImportStatus("loading");
+    setReceiptImportError(null);
+    setReceiptImportCount(null);
+
+    try {
+      const base64Image = await readFileAsBase64(file);
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    inline_data: {
+                      mime_type: file.type || "image/jpeg",
+                      data: base64Image,
+                    },
+                  },
+                  {
+                    text: RECEIPT_IMPORT_PROMPT,
+                  },
+                ],
+              },
+            ],
+            generationConfig: {
+              response_mime_type: "application/json",
+            },
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`Gemini request failed with ${response.status}`);
+      }
+
+      const responseBody = (await response.json()) as unknown;
+      const rawText = extractGeminiText(responseBody);
+      const parsedItems = normalizeImportedItems(JSON.parse(rawText));
+
+      parsedItems.forEach((item) => {
+        addItem({
+          name: item.name,
+          priceCents: Math.round(item.price * 100),
+        });
+      });
+
+      setReceiptImportStatus("idle");
+      setReceiptImportCount(parsedItems.length);
+      setNewItemId(null);
+    } catch {
+      setReceiptImportStatus("error");
+      setReceiptImportError(
+        "Couldn't read the receipt — try a clearer photo or add items manually",
+      );
+    } finally {
+      event.target.value = "";
+    }
+  };
+
   const handleResetBill = () => {
     const shouldReset = window.confirm(
       "Start a new bill? This will clear all people, items, tax, and tip.",
@@ -428,6 +624,9 @@ export default function Home() {
     setTipInput("");
     setCopyStatus("idle");
     setNewItemId(null);
+    setReceiptImportStatus("idle");
+    setReceiptImportError(null);
+    setReceiptImportCount(null);
     window.requestAnimationFrame(() => personNameInputRef.current?.focus());
   };
 
@@ -578,6 +777,48 @@ export default function Home() {
                   );
                 })}
               </div>
+
+              <input
+                ref={receiptInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleReceiptUpload}
+                className="hidden"
+              />
+
+              <button
+                type="button"
+                onClick={() => receiptInputRef.current?.click()}
+                disabled={receiptImportStatus === "loading"}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 transition hover:border-slate-300 hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {receiptImportStatus === "loading" ? "Reading receipt..." : "Upload Receipt"}
+              </button>
+
+              {receiptImportCount ? (
+                <div className="flex items-start justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                  <div>
+                    <p className="font-medium">
+                      {receiptImportCount} {receiptImportCount === 1 ? "item" : "items"} imported — please review and correct
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleDismissImportBanner}
+                    className="text-emerald-700 transition hover:text-emerald-900"
+                    aria-label="Dismiss import banner"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : null}
+
+              {receiptImportStatus === "error" && receiptImportError ? (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+                  {receiptImportError}
+                </div>
+              ) : null}
 
               <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_auto]">
                 <input
