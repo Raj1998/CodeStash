@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useBill } from "@/hooks/useBill";
-import type { BillItem, Person, PersonTotal, TipInputMode } from "@/types";
+import type { BillItem, Person, PersonTotal, SplitMode, TipInputMode } from "@/types";
 
 const formatCents = (value: number) =>
   new Intl.NumberFormat("en-US", {
@@ -42,10 +42,19 @@ const getInitials = (name: string) => {
     .join("");
 };
 
-const buildSummaryText = (people: Person[], totals: PersonTotal[]) => {
+const buildSummaryText = (
+  people: Person[],
+  totals: PersonTotal[],
+  splitMode: SplitMode,
+) => {
   const lines = totals.flatMap((total) => {
     const person = people.find((entry) => entry.id === total.personId);
     const name = person?.name ?? "Unknown person";
+
+    if (splitMode === "equal") {
+      return [name, `- Equal share: ${formatCents(total.totalCents)}`, ""];
+    }
+
     const itemLines = total.itemizedItems.length
       ? total.itemizedItems.map((item) => {
           const label = item.isShared
@@ -57,7 +66,7 @@ const buildSummaryText = (people: Person[], totals: PersonTotal[]) => {
       : ["- No assigned items"];
 
     return [
-      `${name}`,
+      name,
       ...itemLines,
       `Tax: ${formatCents(total.taxShareCents)}`,
       `Tip: ${formatCents(total.tipShareCents)}`,
@@ -110,6 +119,7 @@ const ItemCard = ({
   item,
   people,
   isNew,
+  splitMode,
   onUpdate,
   onDelete,
   onToggleAssignment,
@@ -117,6 +127,7 @@ const ItemCard = ({
   item: BillItem;
   people: Person[];
   isNew: boolean;
+  splitMode: SplitMode;
   onUpdate: (itemId: string, updates: { name?: string; priceCents?: number }) => void;
   onDelete: (itemId: string) => void;
   onToggleAssignment: (itemId: string, personId: string) => void;
@@ -173,37 +184,43 @@ const ItemCard = ({
             </label>
           </div>
 
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                Assign to people
-              </p>
-              <div className="flex items-center gap-2">
-                {everyoneAssigned ? (
-                  <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-                    Everyone
-                  </span>
-                ) : null}
-                <p className="text-sm font-semibold text-slate-700">
-                  {formatCents(item.priceCents)}
+          {splitMode === "individual" ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Assign to people
                 </p>
+                <div className="flex items-center gap-2">
+                  {everyoneAssigned ? (
+                    <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                      Everyone
+                    </span>
+                  ) : null}
+                  <p className="text-sm font-semibold text-slate-700">
+                    {formatCents(item.priceCents)}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {people.map((person) => {
+                  const assigned = item.assignedTo.includes(person.id);
+
+                  return (
+                    <PersonChip
+                      key={person.id}
+                      person={person}
+                      assigned={assigned}
+                      onClick={() => onToggleAssignment(item.id, person.id)}
+                    />
+                  );
+                })}
               </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {people.map((person) => {
-                const assigned = item.assignedTo.includes(person.id);
-
-                return (
-                  <PersonChip
-                    key={person.id}
-                    person={person}
-                    assigned={assigned}
-                    onClick={() => onToggleAssignment(item.id, person.id)}
-                  />
-                );
-              })}
+          ) : (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+              Quick split is on — this item will be divided evenly across everyone.
             </div>
-          </div>
+          )}
         </div>
 
         <button
@@ -216,15 +233,17 @@ const ItemCard = ({
         </button>
       </div>
 
-      {isUnassigned ? (
+      {splitMode === "equal" ? (
+        <p className="mt-3 text-sm text-slate-500">
+          Included in the even split across all people.
+        </p>
+      ) : isUnassigned ? (
         <div className="mt-3 flex items-center gap-2 rounded-2xl border border-amber-200 bg-white/70 px-3 py-2 text-sm text-amber-800">
           <span aria-hidden="true">⚠️</span>
           <span>This item is not assigned yet and will be excluded from totals.</span>
         </div>
       ) : everyoneAssigned ? (
-        <p className="mt-3 text-sm text-slate-500">
-          Shared by everyone on the bill.
-        </p>
+        <p className="mt-3 text-sm text-slate-500">Shared by everyone on the bill.</p>
       ) : (
         <p className="mt-3 text-sm text-slate-500">
           Split between {assignedPeople.map((person) => person.name).join(", ")}.
@@ -247,6 +266,7 @@ export default function Home() {
     setTax,
     setTip,
     reset,
+    setSplitMode,
     personTotals,
   } = useBill();
 
@@ -317,7 +337,8 @@ export default function Home() {
       return;
     }
 
-    const existingIds = new Set(state.items.map((item) => item.id));
+    const previousLength = state.items.length;
+
     addItem({
       name: trimmedName,
       priceCents,
@@ -326,7 +347,7 @@ export default function Home() {
     setItemPrice("");
     window.requestAnimationFrame(() => itemNameInputRef.current?.focus());
     window.setTimeout(() => {
-      const newestItem = state.items.find((item) => !existingIds.has(item.id));
+      const newestItem = state.items[previousLength];
       if (newestItem) {
         setNewItemId(newestItem.id);
       }
@@ -334,11 +355,7 @@ export default function Home() {
   };
 
   useEffect(() => {
-    if (newItemId) {
-      return;
-    }
-
-    if (!state.items.length) {
+    if (newItemId || state.items.length === 0) {
       return;
     }
 
@@ -384,7 +401,7 @@ export default function Home() {
 
   const handleCopySummary = async () => {
     try {
-      const summaryText = buildSummaryText(state.people, orderedTotals);
+      const summaryText = buildSummaryText(state.people, orderedTotals, state.splitMode);
       await navigator.clipboard.writeText(summaryText);
       setCopyStatus("copied");
       window.setTimeout(() => setCopyStatus("idle"), 2000);
@@ -527,7 +544,9 @@ export default function Home() {
               <div>
                 <h2 className="text-lg font-semibold text-slate-950">Items</h2>
                 <p className="text-sm text-slate-500">
-                  Add dishes and drinks, then tap people to mark who shared each one.
+                  {state.splitMode === "individual"
+                    ? "Add dishes and drinks, then tap people to mark who shared each one."
+                    : "Add dishes and drinks, and we’ll divide everything evenly for you."}
                 </p>
               </div>
               <div className="text-right">
@@ -537,6 +556,29 @@ export default function Home() {
             </div>
 
             <div className="space-y-3">
+              <div className="inline-flex rounded-full bg-slate-100 p-1 shadow-inner">
+                {(["individual", "equal"] as SplitMode[]).map((mode) => {
+                  const isActive = state.splitMode === mode;
+
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setSplitMode(mode)}
+                      className={`rounded-full px-3 py-2 text-sm font-medium transition sm:px-4 ${
+                        isActive
+                          ? "bg-white text-slate-950 shadow-sm"
+                          : "text-slate-500 hover:text-slate-800"
+                      }`}
+                    >
+                      {mode === "individual"
+                        ? "Assign individually"
+                        : "Split everything equally"}
+                    </button>
+                  );
+                })}
+              </div>
+
               <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_auto]">
                 <input
                   ref={itemNameInputRef}
@@ -588,6 +630,7 @@ export default function Home() {
                       item={item}
                       people={state.people}
                       isNew={newItemId === item.id}
+                      splitMode={state.splitMode}
                       onUpdate={updateItem}
                       onDelete={removeItem}
                       onToggleAssignment={toggleItemAssignment}
@@ -767,6 +810,8 @@ export default function Home() {
                     return null;
                   }
 
+                  const isEqualMode = state.splitMode === "equal";
+
                   return (
                     <article
                       key={person.id}
@@ -783,7 +828,9 @@ export default function Home() {
                           <div>
                             <h3 className="text-base font-semibold text-slate-950">{person.name}</h3>
                             <p className="text-sm text-slate-500">
-                              {total.itemizedItems.length} {total.itemizedItems.length === 1 ? "item" : "items"}
+                              {isEqualMode
+                                ? "Equal split"
+                                : `${total.itemizedItems.length} ${total.itemizedItems.length === 1 ? "item" : "items"}`}
                             </p>
                           </div>
                         </div>
@@ -796,50 +843,61 @@ export default function Home() {
                       </div>
 
                       <div className="space-y-4 px-4 py-4">
-                        <div className="space-y-2">
-                          {total.itemizedItems.length > 0 ? (
-                            total.itemizedItems.map((item) => (
-                              <div
-                                key={`${person.id}-${item.itemId}`}
-                                className="flex items-start justify-between gap-3 text-sm"
-                              >
-                                <span className="text-slate-600">
-                                  {item.isShared
-                                    ? `${item.name} (shared ÷${item.splitCount})`
-                                    : item.name}
-                                </span>
-                                <span className="font-medium text-slate-900">
-                                  {formatCents(item.shareCents)}
-                                </span>
-                              </div>
-                            ))
-                          ) : (
-                            <p className="text-sm text-slate-500">No assigned items yet.</p>
-                          )}
-                        </div>
-
-                        <div className="rounded-2xl border border-slate-200 bg-white/70 p-3">
-                          <div className="space-y-2 text-sm text-slate-600">
-                            <div className="flex items-center justify-between">
-                              <span>Subtotal</span>
-                              <span className="font-medium text-slate-900">
-                                {formatCents(total.subtotalCents)}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <span>Tax share</span>
-                              <span className="font-medium text-slate-900">
-                                {formatCents(total.taxShareCents)}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <span>Tip share</span>
-                              <span className="font-medium text-slate-900">
-                                {formatCents(total.tipShareCents)}
-                              </span>
-                            </div>
+                        {isEqualMode ? (
+                          <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 text-sm text-slate-600">
+                            <p className="font-medium text-slate-900">Quick split is on.</p>
+                            <p className="mt-1">
+                              Grand total ÷ {state.people.length} {state.people.length === 1 ? "person" : "people"} = {formatCents(total.totalCents)} each.
+                            </p>
                           </div>
-                        </div>
+                        ) : (
+                          <>
+                            <div className="space-y-2">
+                              {total.itemizedItems.length > 0 ? (
+                                total.itemizedItems.map((item) => (
+                                  <div
+                                    key={`${person.id}-${item.itemId}`}
+                                    className="flex items-start justify-between gap-3 text-sm"
+                                  >
+                                    <span className="text-slate-600">
+                                      {item.isShared
+                                        ? `${item.name} (shared ÷${item.splitCount})`
+                                        : item.name}
+                                    </span>
+                                    <span className="font-medium text-slate-900">
+                                      {formatCents(item.shareCents)}
+                                    </span>
+                                  </div>
+                                ))
+                              ) : (
+                                <p className="text-sm text-slate-500">No assigned items yet.</p>
+                              )}
+                            </div>
+
+                            <div className="rounded-2xl border border-slate-200 bg-white/70 p-3">
+                              <div className="space-y-2 text-sm text-slate-600">
+                                <div className="flex items-center justify-between">
+                                  <span>Subtotal</span>
+                                  <span className="font-medium text-slate-900">
+                                    {formatCents(total.subtotalCents)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span>Tax share</span>
+                                  <span className="font-medium text-slate-900">
+                                    {formatCents(total.taxShareCents)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span>Tip share</span>
+                                  <span className="font-medium text-slate-900">
+                                    {formatCents(total.tipShareCents)}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </div>
                     </article>
                   );
