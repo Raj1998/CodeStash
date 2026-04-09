@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useBill } from "@/hooks/useBill";
 import type { BillItem, Person, PersonTotal, TipInputMode } from "@/types";
@@ -109,12 +109,14 @@ const PersonChip = ({
 const ItemCard = ({
   item,
   people,
+  isNew,
   onUpdate,
   onDelete,
   onToggleAssignment,
 }: {
   item: BillItem;
   people: Person[];
+  isNew: boolean;
   onUpdate: (itemId: string, updates: { name?: string; priceCents?: number }) => void;
   onDelete: (itemId: string) => void;
   onToggleAssignment: (itemId: string, personId: string) => void;
@@ -122,8 +124,14 @@ const ItemCard = ({
   const [draftName, setDraftName] = useState(item.name);
   const [draftPrice, setDraftPrice] = useState((item.priceCents / 100).toFixed(2));
 
+  useEffect(() => {
+    setDraftName(item.name);
+    setDraftPrice((item.priceCents / 100).toFixed(2));
+  }, [item.name, item.priceCents]);
+
   const assignedPeople = people.filter((person) => item.assignedTo.includes(person.id));
   const isUnassigned = assignedPeople.length === 0;
+  const everyoneAssigned = people.length > 0 && assignedPeople.length === people.length;
 
   return (
     <article
@@ -131,7 +139,7 @@ const ItemCard = ({
         isUnassigned
           ? "border-amber-300 bg-amber-50/70"
           : "border-slate-200 bg-white"
-      }`}
+      } ${isNew ? "ring-2 ring-emerald-200 ring-offset-2 ring-offset-slate-50" : ""}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1 space-y-3">
@@ -170,9 +178,16 @@ const ItemCard = ({
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                 Assign to people
               </p>
-              <p className="text-sm font-semibold text-slate-700">
-                {formatCents(item.priceCents)}
-              </p>
+              <div className="flex items-center gap-2">
+                {everyoneAssigned ? (
+                  <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                    Everyone
+                  </span>
+                ) : null}
+                <p className="text-sm font-semibold text-slate-700">
+                  {formatCents(item.priceCents)}
+                </p>
+              </div>
             </div>
             <div className="flex flex-wrap gap-2">
               {people.map((person) => {
@@ -206,6 +221,10 @@ const ItemCard = ({
           <span aria-hidden="true">⚠️</span>
           <span>This item is not assigned yet and will be excluded from totals.</span>
         </div>
+      ) : everyoneAssigned ? (
+        <p className="mt-3 text-sm text-slate-500">
+          Shared by everyone on the bill.
+        </p>
       ) : (
         <p className="mt-3 text-sm text-slate-500">
           Split between {assignedPeople.map((person) => person.name).join(", ")}.
@@ -227,8 +246,13 @@ export default function Home() {
     toggleItemAssignment,
     setTax,
     setTip,
+    reset,
     personTotals,
   } = useBill();
+
+  const personNameInputRef = useRef<HTMLInputElement>(null);
+  const itemNameInputRef = useRef<HTMLInputElement>(null);
+  const itemPriceInputRef = useRef<HTMLInputElement>(null);
 
   const [personName, setPersonName] = useState("");
   const [itemName, setItemName] = useState("");
@@ -236,6 +260,7 @@ export default function Home() {
   const [taxInput, setTaxInput] = useState("");
   const [tipInput, setTipInput] = useState("");
   const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
+  const [newItemId, setNewItemId] = useState<string | null>(null);
 
   const totalsMap = personTotals();
   const subtotalCents = useMemo(
@@ -252,6 +277,16 @@ export default function Home() {
     [state.people, totalsMap],
   );
 
+  useEffect(() => {
+    if (!newItemId) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setNewItemId(null), 1800);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [newItemId]);
+
   const handleAddPerson = () => {
     if (!personName.trim()) {
       return;
@@ -259,6 +294,7 @@ export default function Home() {
 
     addPerson({ name: personName });
     setPersonName("");
+    window.requestAnimationFrame(() => personNameInputRef.current?.focus());
   };
 
   const handleRemovePerson = (person: Person) => {
@@ -275,18 +311,39 @@ export default function Home() {
 
   const handleAddItem = () => {
     const priceCents = parseCurrencyToCents(itemPrice);
+    const trimmedName = itemName.trim();
 
-    if (!itemName.trim() || priceCents <= 0) {
+    if (!trimmedName || priceCents <= 0) {
       return;
     }
 
+    const existingIds = new Set(state.items.map((item) => item.id));
     addItem({
-      name: itemName,
+      name: trimmedName,
       priceCents,
     });
     setItemName("");
     setItemPrice("");
+    window.requestAnimationFrame(() => itemNameInputRef.current?.focus());
+    window.setTimeout(() => {
+      const newestItem = state.items.find((item) => !existingIds.has(item.id));
+      if (newestItem) {
+        setNewItemId(newestItem.id);
+      }
+    }, 0);
   };
+
+  useEffect(() => {
+    if (newItemId) {
+      return;
+    }
+
+    if (!state.items.length) {
+      return;
+    }
+
+    setNewItemId(state.items[state.items.length - 1]?.id ?? null);
+  }, [state.items, newItemId]);
 
   const handleTaxBlur = () => {
     const cents = parseCurrencyToCents(taxInput);
@@ -337,383 +394,461 @@ export default function Home() {
     }
   };
 
+  const handleResetBill = () => {
+    const shouldReset = window.confirm(
+      "Start a new bill? This will clear all people, items, tax, and tip.",
+    );
+
+    if (!shouldReset) {
+      return;
+    }
+
+    reset();
+    setPersonName("");
+    setItemName("");
+    setItemPrice("");
+    setTaxInput("");
+    setTipInput("");
+    setCopyStatus("idle");
+    setNewItemId(null);
+    window.requestAnimationFrame(() => personNameInputRef.current?.focus());
+  };
+
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-5 px-4 py-5 sm:max-w-2xl sm:px-6">
-      <header className="space-y-2 rounded-[2rem] bg-slate-900 px-5 py-6 text-white shadow-lg shadow-slate-300/40">
-        <p className="text-sm font-medium text-slate-300">Dinner table split helper</p>
-        <div className="flex items-end justify-between gap-4">
+    <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
+      <header className="sticky top-0 z-10 -mx-4 border-b border-slate-200/80 bg-slate-50/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3">
           <div>
-            <h1 className="text-3xl font-semibold tracking-tight">Split the Bill</h1>
-            <p className="mt-1 text-sm text-slate-300">
-              Add everyone, drop in the items, and tap chips to assign who shared what.
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">
+              Dinner table tool
             </p>
-          </div>
-        </div>
-      </header>
-
-      <section className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-950">People</h2>
-            <p className="text-sm text-slate-500">
-              Add each friend once, then tap their chip to remove them.
-            </p>
-          </div>
-          <div className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600">
-            {state.people.length} {state.people.length === 1 ? "person" : "people"}
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-3">
-          <div className="flex gap-2">
-            <input
-              value={personName}
-              onChange={(event) => setPersonName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  handleAddPerson();
-                }
-              }}
-              placeholder="Add a person"
-              className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-slate-400 focus:bg-white"
-            />
-            <button
-              type="button"
-              onClick={handleAddPerson}
-              className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 active:scale-[0.98]"
-            >
-              Add
-            </button>
-          </div>
-
-          {state.people.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {state.people.map((person) => (
-                <PersonChip
-                  key={person.id}
-                  person={person}
-                  showRemove
-                  onClick={() => handleRemovePerson(person)}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-              Start by adding everyone at the table.
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-950">Items</h2>
-            <p className="text-sm text-slate-500">
-              Add dishes and drinks, then tap people to mark who shared each one.
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="text-sm font-semibold text-slate-700">{formatCents(subtotalCents)}</p>
-            <p className="text-xs text-slate-500">subtotal</p>
-          </div>
-        </div>
-
-        <div className="space-y-3">
-          <div className="grid grid-cols-[1fr_7rem_auto] gap-2">
-            <input
-              value={itemName}
-              onChange={(event) => setItemName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  handleAddItem();
-                }
-              }}
-              placeholder="Item name"
-              className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-slate-400 focus:bg-white"
-            />
-            <input
-              inputMode="decimal"
-              value={itemPrice}
-              onChange={(event) => setItemPrice(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  handleAddItem();
-                }
-              }}
-              placeholder="0.00"
-              className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-slate-400 focus:bg-white"
-            />
-            <button
-              type="button"
-              onClick={handleAddItem}
-              className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 active:scale-[0.98]"
-            >
-              Add
-            </button>
-          </div>
-
-          {state.people.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-amber-200 bg-amber-50 px-4 py-5 text-sm text-amber-800">
-              Add people first so you can assign items as you go.
-            </div>
-          ) : null}
-
-          {state.items.length > 0 ? (
-            <div className="space-y-3">
-              {state.items.map((item) => (
-                <ItemCard
-                  key={item.id}
-                  item={item}
-                  people={state.people}
-                  onUpdate={updateItem}
-                  onDelete={removeItem}
-                  onToggleAssignment={toggleItemAssignment}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-              No items yet — add the first dish to get the split started.
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-950">Tax &amp; Tip</h2>
-            <p className="text-sm text-slate-500">
-              Enter tax directly, and switch tip between a percent or dollar amount.
-            </p>
-          </div>
-          <div className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600">
-            {formatCents(grandTotalCents)}
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1">
-              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                Tax
-              </span>
-              <input
-                inputMode="decimal"
-                value={taxInput}
-                onChange={(event) => setTaxInput(event.target.value)}
-                onBlur={handleTaxBlur}
-                placeholder="0.00"
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-slate-400 focus:bg-white"
-              />
-            </label>
-
-            <div className="space-y-2 rounded-3xl bg-slate-50 p-3">
-              <div className="inline-flex rounded-full bg-white p-1 shadow-sm">
-                {(["percentage", "amount"] as TipInputMode[]).map((mode) => {
-                  const isActive = tipState.mode === mode;
-
-                  return (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => handleTipModeChange(mode)}
-                      className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                        isActive
-                          ? "bg-slate-900 text-white"
-                          : "text-slate-500 hover:text-slate-800"
-                      }`}
-                    >
-                      {mode === "percentage" ? "% Tip" : "$ Tip"}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <label className="space-y-1">
-                <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  {tipState.mode === "percentage" ? "Tip %" : "Tip amount"}
-                </span>
-                <input
-                  inputMode="decimal"
-                  value={tipInput}
-                  onChange={(event) => setTipInput(event.target.value)}
-                  onBlur={handleTipBlur}
-                  placeholder={tipState.mode === "percentage" ? "18" : "0.00"}
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-slate-400"
-                />
-              </label>
-
-              <p className="text-sm text-slate-500">
-                {tipState.mode === "percentage"
-                  ? `Tip amount: ${formatCents(state.tipCents)}`
-                  : `Tip percentage: ${formatPercentage(tipState.percentage)}`}
-              </p>
-            </div>
-          </div>
-
-          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-            <div className="space-y-2 text-sm text-slate-600">
-              <div className="flex items-center justify-between">
-                <span>Subtotal</span>
-                <span className="font-medium text-slate-900">{formatCents(subtotalCents)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>Tax</span>
-                <span className="font-medium text-slate-900">{formatCents(state.taxCents)}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>Tip</span>
-                <span className="font-medium text-slate-900">{formatCents(state.tipCents)}</span>
-              </div>
-              <div className="mt-3 flex items-center justify-between border-t border-dashed border-slate-300 pt-3 text-base font-semibold text-slate-950">
-                <span>Grand total</span>
-                <span>{formatCents(grandTotalCents)}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-base font-semibold text-slate-950">Quick status</h2>
-            <p className="text-sm text-slate-500">
-              Keep unassigned items at zero before moving on to tax, tip, and summary.
-            </p>
-          </div>
-          <div
-            className={`rounded-full px-3 py-1 text-sm font-semibold ${
-              unassignedCount > 0
-                ? "bg-amber-100 text-amber-800"
-                : "bg-emerald-100 text-emerald-800"
-            }`}
-          >
-            {unassignedCount > 0 ? `${unassignedCount} unassigned` : "All assigned"}
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-950">Summary</h2>
-            <p className="text-sm text-slate-500">
-              A clean receipt-style view so each person can glance and know exactly what they owe.
-            </p>
+            <h1 className="text-lg font-semibold tracking-tight text-slate-950 sm:text-xl">
+              Split the Bill
+            </h1>
           </div>
           <button
             type="button"
-            onClick={handleCopySummary}
-            disabled={orderedTotals.length === 0}
-            className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={handleResetBill}
+            className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-100"
           >
-            {copyStatus === "copied"
-              ? "Copied"
-              : copyStatus === "error"
-                ? "Copy failed"
-                : "Copy summary"}
+            Reset / New Bill
           </button>
         </div>
+      </header>
 
-        {state.items.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-            Add items to generate the final per-person summary.
+      <section className="rounded-[2rem] bg-slate-900 px-5 py-6 text-white shadow-lg shadow-slate-300/40">
+        <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr] lg:items-end">
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-slate-300">Dinner table split helper</p>
+            <div>
+              <h2 className="text-3xl font-semibold tracking-tight">Fast, fair, and easy to scan.</h2>
+              <p className="mt-1 text-sm text-slate-300 sm:max-w-lg">
+                Add everyone, drop in the items, and tap chips to assign who shared what.
+              </p>
+            </div>
           </div>
-        ) : (
-          <div className="space-y-4">
-            {orderedTotals.map((total) => {
-              const person = state.people.find((entry) => entry.id === total.personId);
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2">
+            <div className="rounded-3xl bg-white/10 px-4 py-3">
+              <p className="text-xs uppercase tracking-wide text-slate-300">People</p>
+              <p className="mt-1 text-2xl font-semibold">{state.people.length}</p>
+            </div>
+            <div className="rounded-3xl bg-white/10 px-4 py-3">
+              <p className="text-xs uppercase tracking-wide text-slate-300">Items</p>
+              <p className="mt-1 text-2xl font-semibold">{state.items.length}</p>
+            </div>
+            <div className="rounded-3xl bg-white/10 px-4 py-3 sm:col-span-2 lg:col-span-2">
+              <p className="text-xs uppercase tracking-wide text-slate-300">Grand total</p>
+              <p className="mt-1 text-3xl font-semibold tracking-tight">{formatCents(grandTotalCents)}</p>
+            </div>
+          </div>
+        </div>
+      </section>
 
-              if (!person) {
-                return null;
-              }
+      <div className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
+        <div className="space-y-5">
+          <section className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-950">People</h2>
+                <p className="text-sm text-slate-500">
+                  Add each friend once, then tap their chip to remove them.
+                </p>
+              </div>
+              <div className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600">
+                {state.people.length} {state.people.length === 1 ? "person" : "people"}
+              </div>
+            </div>
 
-              return (
-                <article
-                  key={person.id}
-                  className="overflow-hidden rounded-[1.75rem] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] shadow-sm"
+            <div className="flex flex-col gap-3">
+              <div className="flex gap-2">
+                <input
+                  ref={personNameInputRef}
+                  value={personName}
+                  onChange={(event) => setPersonName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      handleAddPerson();
+                    }
+                  }}
+                  placeholder="Add a person"
+                  className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-slate-400 focus:bg-white"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddPerson}
+                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 active:scale-[0.98]"
                 >
-                  <div className="flex items-center justify-between gap-3 border-b border-dashed border-slate-200 px-4 py-4">
-                    <div className="flex items-center gap-3">
-                      <span
-                        className="flex h-11 w-11 items-center justify-center rounded-full text-sm font-semibold text-white shadow-sm"
-                        style={{ backgroundColor: person.color }}
-                      >
-                        {getInitials(person.name)}
-                      </span>
-                      <div>
-                        <h3 className="text-base font-semibold text-slate-950">{person.name}</h3>
-                        <p className="text-sm text-slate-500">
-                          {total.itemizedItems.length} {total.itemizedItems.length === 1 ? "item" : "items"}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs uppercase tracking-wide text-slate-500">Total</p>
-                      <p className="text-2xl font-semibold tracking-tight text-slate-950">
-                        {formatCents(total.totalCents)}
+                  Add
+                </button>
+              </div>
+
+              {state.people.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {state.people.map((person) => (
+                    <PersonChip
+                      key={person.id}
+                      person={person}
+                      showRemove
+                      onClick={() => handleRemovePerson(person)}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                  Start by adding everyone at the table.
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-950">Items</h2>
+                <p className="text-sm text-slate-500">
+                  Add dishes and drinks, then tap people to mark who shared each one.
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-sm font-semibold text-slate-700">{formatCents(subtotalCents)}</p>
+                <p className="text-xs text-slate-500">subtotal</p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_auto]">
+                <input
+                  ref={itemNameInputRef}
+                  value={itemName}
+                  onChange={(event) => setItemName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      itemPriceInputRef.current?.focus();
+                    }
+                  }}
+                  placeholder="Item name"
+                  className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-slate-400 focus:bg-white"
+                />
+                <input
+                  ref={itemPriceInputRef}
+                  inputMode="decimal"
+                  value={itemPrice}
+                  onChange={(event) => setItemPrice(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      handleAddItem();
+                    }
+                  }}
+                  placeholder="0.00"
+                  className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-slate-400 focus:bg-white"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddItem}
+                  className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 active:scale-[0.98]"
+                >
+                  Add
+                </button>
+              </div>
+
+              {state.people.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-amber-200 bg-amber-50 px-4 py-5 text-sm text-amber-800">
+                  Add people first.
+                </div>
+              ) : null}
+
+              {state.items.length > 0 ? (
+                <div className="space-y-3">
+                  {state.items.map((item) => (
+                    <ItemCard
+                      key={item.id}
+                      item={item}
+                      people={state.people}
+                      isNew={newItemId === item.id}
+                      onUpdate={updateItem}
+                      onDelete={removeItem}
+                      onToggleAssignment={toggleItemAssignment}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                  No items yet — add the first dish to get the split started.
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+
+        <div className="space-y-5">
+          <section className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-950">Tax &amp; Tip</h2>
+                <p className="text-sm text-slate-500">
+                  Enter tax directly, and switch tip between a percent or dollar amount.
+                </p>
+              </div>
+              <div className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600">
+                {formatCents(grandTotalCents)}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                    Tax
+                  </span>
+                  <input
+                    inputMode="decimal"
+                    value={taxInput}
+                    onChange={(event) => setTaxInput(event.target.value)}
+                    onBlur={handleTaxBlur}
+                    placeholder="0.00"
+                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-slate-400 focus:bg-white"
+                  />
+                </label>
+
+                <div className="space-y-2 rounded-3xl bg-slate-50 p-3">
+                  <div className="inline-flex rounded-full bg-white p-1 shadow-sm">
+                    {(["percentage", "amount"] as TipInputMode[]).map((mode) => {
+                      const isActive = tipState.mode === mode;
+
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => handleTipModeChange(mode)}
+                          className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                            isActive
+                              ? "bg-slate-900 text-white"
+                              : "text-slate-500 hover:text-slate-800"
+                          }`}
+                        >
+                          {mode === "percentage" ? "% Tip" : "$ Tip"}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <label className="space-y-1">
+                    <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                      {tipState.mode === "percentage" ? "Tip %" : "Tip amount"}
+                    </span>
+                    <input
+                      inputMode="decimal"
+                      value={tipInput}
+                      onChange={(event) => setTipInput(event.target.value)}
+                      onBlur={handleTipBlur}
+                      placeholder={tipState.mode === "percentage" ? "18" : "0.00"}
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-950 outline-none transition focus:border-slate-400"
+                    />
+                  </label>
+
+                  <p className="text-sm text-slate-500">
+                    {tipState.mode === "percentage"
+                      ? `Tip amount: ${formatCents(state.tipCents)}`
+                      : `Tip percentage: ${formatPercentage(tipState.percentage)}`}
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                <div className="space-y-2 text-sm text-slate-600">
+                  <div className="flex items-center justify-between">
+                    <span>Subtotal</span>
+                    <span className="font-medium text-slate-900">{formatCents(subtotalCents)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Tax</span>
+                    <span className="font-medium text-slate-900">{formatCents(state.taxCents)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Tip</span>
+                    <span className="font-medium text-slate-900">{formatCents(state.tipCents)}</span>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between border-t border-dashed border-slate-300 pt-3 text-base font-semibold text-slate-950">
+                    <span>Grand total</span>
+                    <span>{formatCents(grandTotalCents)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-base font-semibold text-slate-950">Quick status</h2>
+                <p className="text-sm text-slate-500">
+                  Keep unassigned items at zero before moving on to tax, tip, and summary.
+                </p>
+              </div>
+              <div
+                className={`rounded-full px-3 py-1 text-sm font-semibold ${
+                  unassignedCount > 0
+                    ? "bg-amber-100 text-amber-800"
+                    : "bg-emerald-100 text-emerald-800"
+                }`}
+              >
+                {unassignedCount > 0 ? `${unassignedCount} unassigned` : "All assigned"}
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-[2rem] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-950">Summary</h2>
+                <p className="text-sm text-slate-500">
+                  A clean receipt-style view so each person can glance and know exactly what they owe.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleCopySummary}
+                disabled={orderedTotals.length === 0 || state.items.length === 0}
+                className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {copyStatus === "copied"
+                  ? "Copied"
+                  : copyStatus === "error"
+                    ? "Copy failed"
+                    : "Copy summary"}
+              </button>
+            </div>
+
+            {state.items.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                Add items to generate the final per-person summary.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="rounded-3xl bg-slate-950 px-4 py-4 text-white shadow-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-300">Bill total</p>
+                      <p className="mt-1 text-sm text-slate-300">
+                        Subtotal, tax, and tip combined.
                       </p>
                     </div>
+                    <p className="text-4xl font-semibold tracking-tight">{formatCents(grandTotalCents)}</p>
                   </div>
+                </div>
 
-                  <div className="space-y-4 px-4 py-4">
-                    <div className="space-y-2">
-                      {total.itemizedItems.length > 0 ? (
-                        total.itemizedItems.map((item) => (
-                          <div
-                            key={`${person.id}-${item.itemId}`}
-                            className="flex items-start justify-between gap-3 text-sm"
+                {orderedTotals.map((total) => {
+                  const person = state.people.find((entry) => entry.id === total.personId);
+
+                  if (!person) {
+                    return null;
+                  }
+
+                  return (
+                    <article
+                      key={person.id}
+                      className="overflow-hidden rounded-[1.75rem] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] shadow-sm"
+                    >
+                      <div className="flex items-center justify-between gap-3 border-b border-dashed border-slate-200 px-4 py-4">
+                        <div className="flex items-center gap-3">
+                          <span
+                            className="flex h-11 w-11 items-center justify-center rounded-full text-sm font-semibold text-white shadow-sm"
+                            style={{ backgroundColor: person.color }}
                           >
-                            <span className="text-slate-600">
-                              {item.isShared
-                                ? `${item.name} (shared ÷${item.splitCount})`
-                                : item.name}
-                            </span>
-                            <span className="font-medium text-slate-900">
-                              {formatCents(item.shareCents)}
-                            </span>
+                            {getInitials(person.name)}
+                          </span>
+                          <div>
+                            <h3 className="text-base font-semibold text-slate-950">{person.name}</h3>
+                            <p className="text-sm text-slate-500">
+                              {total.itemizedItems.length} {total.itemizedItems.length === 1 ? "item" : "items"}
+                            </p>
                           </div>
-                        ))
-                      ) : (
-                        <p className="text-sm text-slate-500">No assigned items yet.</p>
-                      )}
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-white/70 p-3">
-                      <div className="space-y-2 text-sm text-slate-600">
-                        <div className="flex items-center justify-between">
-                          <span>Subtotal</span>
-                          <span className="font-medium text-slate-900">
-                            {formatCents(total.subtotalCents)}
-                          </span>
                         </div>
-                        <div className="flex items-center justify-between">
-                          <span>Tax share</span>
-                          <span className="font-medium text-slate-900">
-                            {formatCents(total.taxShareCents)}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span>Tip share</span>
-                          <span className="font-medium text-slate-900">
-                            {formatCents(total.tipShareCents)}
-                          </span>
+                        <div className="text-right">
+                          <p className="text-xs uppercase tracking-wide text-slate-500">Total</p>
+                          <p className="text-2xl font-semibold tracking-tight text-slate-950">
+                            {formatCents(total.totalCents)}
+                          </p>
                         </div>
                       </div>
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        )}
-      </section>
+
+                      <div className="space-y-4 px-4 py-4">
+                        <div className="space-y-2">
+                          {total.itemizedItems.length > 0 ? (
+                            total.itemizedItems.map((item) => (
+                              <div
+                                key={`${person.id}-${item.itemId}`}
+                                className="flex items-start justify-between gap-3 text-sm"
+                              >
+                                <span className="text-slate-600">
+                                  {item.isShared
+                                    ? `${item.name} (shared ÷${item.splitCount})`
+                                    : item.name}
+                                </span>
+                                <span className="font-medium text-slate-900">
+                                  {formatCents(item.shareCents)}
+                                </span>
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-sm text-slate-500">No assigned items yet.</p>
+                          )}
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-white/70 p-3">
+                          <div className="space-y-2 text-sm text-slate-600">
+                            <div className="flex items-center justify-between">
+                              <span>Subtotal</span>
+                              <span className="font-medium text-slate-900">
+                                {formatCents(total.subtotalCents)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span>Tax share</span>
+                              <span className="font-medium text-slate-900">
+                                {formatCents(total.taxShareCents)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span>Tip share</span>
+                              <span className="font-medium text-slate-900">
+                                {formatCents(total.tipShareCents)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
     </main>
   );
 }

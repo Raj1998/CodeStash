@@ -214,6 +214,7 @@ export interface UseBillResult {
   setTax: (taxCents: number) => void;
   setTip: (value: number, mode?: TipInputMode) => void;
   setSplitMode: (mode: SplitMode) => void;
+  reset: () => void;
   personTotals: () => PersonTotalsMap;
 }
 
@@ -416,6 +417,11 @@ export const useBill = (): UseBillResult => {
     }));
   };
 
+  const reset = () => {
+    setState(DEFAULT_BILL_STATE);
+    setTipState(DEFAULT_TIP_STATE);
+  };
+
   return {
     state,
     tipState,
@@ -429,6 +435,7 @@ export const useBill = (): UseBillResult => {
     setTax,
     setTip,
     setSplitMode,
+    reset,
     personTotals: () => computedPersonTotals,
   };
 };
