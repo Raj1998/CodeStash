@@ -29,8 +29,11 @@ export interface TipState {
 }
 
 export interface PersonItemizedShare {
+  itemId: string;
   name: string;
   shareCents: number;
+  splitCount: number;
+  isShared: boolean;
 }
 
 export interface PersonTotal {

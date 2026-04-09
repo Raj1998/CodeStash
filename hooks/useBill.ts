@@ -168,19 +168,14 @@ const buildPersonTotals = (
     assignedPeople.forEach((personId, index) => {
       const shareCents = shares[index] ?? 0;
       const personTotal = totals[personId];
-      const existingItem = personTotal.itemizedItems.find(
-        (entry) => entry.name === item.name,
-      );
-
-      if (existingItem) {
-        existingItem.shareCents += shareCents;
-      } else {
-        const itemizedShare: PersonItemizedShare = {
-          name: item.name,
-          shareCents,
-        };
-        personTotal.itemizedItems.push(itemizedShare);
-      }
+      const itemizedShare: PersonItemizedShare = {
+        itemId: item.id,
+        name: item.name,
+        shareCents,
+        splitCount: assignedPeople.length,
+        isShared: assignedPeople.length > 1,
+      };
+      personTotal.itemizedItems.push(itemizedShare);
 
       personTotal.subtotalCents += shareCents;
     });
