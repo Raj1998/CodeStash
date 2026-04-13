@@ -15,14 +15,17 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## Receipt Upload Setup
 
-The receipt image upload feature uses the Google Gemini vision API with the `gemini-1.5-flash` model.
+The receipt image upload feature uses the Google Gemini vision API.
 
 1. Copy the example env file values into your local env setup.
-2. Set your Gemini API key:
+2. Set your Gemini API key and model:
 
 ```bash
 NEXT_PUBLIC_GEMINI_API_KEY=your-gemini-api-key-here
+NEXT_PUBLIC_GEMINI_MODEL=gemini-3-flash-preview
 ```
+
+`gemini-3-flash-preview` is the current default because older `gemini-1.5-flash` model names are no longer available on the Gemini Developer API.
 
 Because this app currently calls Gemini directly from the browser, the key is exposed to the client. Treat this as a prototype/stretch-goal setup and use an appropriately restricted key.
 

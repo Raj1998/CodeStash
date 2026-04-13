@@ -5,7 +5,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useBill } from "@/hooks/useBill";
 import type { BillItem, Person, PersonTotal, SplitMode, TipInputMode } from "@/types";
 
-const GEMINI_MODEL = "gemini-3-flash-preview";
+const GEMINI_MODEL =
+  process.env.NEXT_PUBLIC_GEMINI_MODEL?.trim() || "gemini-3-flash-preview";
 const RECEIPT_IMPORT_PROMPT =
   'Parse this restaurant receipt. Return ONLY a JSON array of items, no markdown, no explanation. Format: [{"name": string, "price": number}] where price is in dollars as a decimal. Exclude tax, tip, and totals.';
 
