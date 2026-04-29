@@ -6,4 +6,4 @@ Since this repo contains different project in different branches. Change the cur
 
 If the current branch's working tree is not clear, ask user what to do. If the tree is clear change (checkout not switch) the branch to the project specific main branch. 
 
-This command can also be used to switch back to main branch.
+This command can also be used to switch back to 'main' branch of the repo.
