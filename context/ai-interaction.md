@@ -18,8 +18,8 @@ This is the common workflow that we will use for every single feature/fix:
 4. **Test** - Verify it works in the browser. Run `npm run test` for unit tests and `npm run build` to check for errors
 5. **Iterate** - Iterate and change things if needed
 6. **Commit** - Only after build passes and everything works
-7. **Merge** - Merge to main
-8. **Delete Branch** - Delete branch after merge
+7. **Merge** - Merge to project specific (DevStash's) main branch
+8. **Delete Branch** - Delete branch (project specific) after merge
 9. **Review** - Review AI-generated code periodically and on demand.
 10. Mark as completed in @context/current-feature.md and add to history
 
@@ -27,7 +27,7 @@ Do NOT commit without permission and until the build and tests pass. If build or
 
 ## Branching
 
-We will create a new branch for every feature/fix. Name branch **feature/[feature]** or **fix[fix]**, etc. Ask to delete the branch once merged.
+We will create a new branch for every feature/fix. Name branch **feat/[feature]** or **fix[fix]**, etc. (followed by the project naming conventions) Ask to delete the branch once merged.
 
 ## Commits
 
